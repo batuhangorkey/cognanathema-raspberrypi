@@ -7,7 +7,7 @@ delay = 10
 server_url = "http://127.0.0.1:5000"
 request_timeout = 10
 
-camera = picamera.PiCamera()
+# camera = picamera.PiCamera()
 
 
 def post_image():
@@ -39,4 +39,4 @@ def loop():
 
 if __name__ == "__main__":
     with picamera.PiCamera() as camera:
-        loop()
+        camera

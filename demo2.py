@@ -7,8 +7,9 @@ from flask import Flask, Response
 from picamera import PiCamera
 
 app = Flask(__name__)
+
 camera = PiCamera(framerate=30, resolution=(640, 480))
-camera.iso = 200
+
 
 @app.route("/")
 def index():
@@ -17,13 +18,14 @@ def index():
 
 def gen():
     while True:
-        frame = get_frame()
+        frame = get_frame()  # Implement this function to capture a frame
         yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n\r\n")
 
 
 def get_frame():
     stream = io.BytesIO()
     camera.capture(stream, format="jpeg", use_video_port=True)
+
     stream.seek(0)
     return stream.read()
 
@@ -35,4 +37,4 @@ def exit_handler():
 
 
 if __name__ == "__main__":
-    app.run(port=8000, debug=False)
+    app.run(host='0.0.0.0', port=8000, debug=True)
