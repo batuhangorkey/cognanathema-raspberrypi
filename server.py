@@ -14,15 +14,14 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import socketio
-from picamera import PiCamera
-from picamera.exc import PiCameraAlreadyRecording
+import cv2 as cv
 from PIL import Image
 
 sio = socketio.Client(logger=True)
 
-camera = PiCamera()
-camera.framerate = 30
-camera.resolution = (640, 480)
+camera = cv.VideoCapture(0)
+camera.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 
 i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
 mlx = adafruit_mlx90640.MLX90640(i2c)
@@ -45,65 +44,47 @@ class Organizer:
         print("Camera feed started")
 
         while not self.stop_flag.is_set():
-            try:
-                camera.capture(self.stream, format="jpeg", use_video_port=True)
-            except PiCameraAlreadyRecording as e:
-                print("Camera is already recording, this op is quit")
-                self.stop_flag.set()
-
+            ret, frame = camera.read()
+            
+            if ret:
+                ret, encoded_image = cv.imencode(".jpg", frame, [cv.IMWRITE_JPEG_QUALITY, 20])
+                sio.emit("live_stream", encoded_image.tobytes())
+            
             self.stream.seek(0)
             image = Image.open(self.stream)
             self.stream.seek(0)
 
             image.save(self.compressed, "jpeg", quality=20)
             self.compressed.seek(0)
-
             sio.emit("live_stream", self.compressed.getvalue())
 
             self.stream.seek(0)
-
             self.stream.truncate(0)
-
-            self.compressed.seek(0)
-
-            self.compressed.truncate(0)
-
             time.sleep(0.1)
 
     def thermal_feed(self):
         while not self.stop_flag.is_set():
             try:
                 mlx.getFrame(buffer)  # type: ignore
-
             except ValueError:
                 continue
 
             frame: np.ndarray = buffer.reshape((24, 32))
-
             frame[frame == frame.min()] = frame.mean()
-
             # frame = frame.clip(0, 60)
-
             frame = np.fliplr(frame)
-
             normalized = (frame - frame.min()) / (frame.max() - frame.min())
 
             cm = mpl.colormaps["plasma_r"]  # type: ignore
-
             colored = np.uint8(cm(normalized) * 255)
-
             image = Image.fromarray(colored[:, :, :3] * 255)  # type: ignore
-
             image = image.resize((32 * 10, 24 * 10))
-
             image.save(self.stream, "jpeg")
 
             self.stream.seek(0)
 
             min_value = frame.min()
-
             max_value = frame.max()
-
             mean_value = frame.mean()
 
             data = {
@@ -116,7 +97,6 @@ class Organizer:
             sio.emit("live_stream", data)
 
             self.stream.seek(0)
-
             self.stream.truncate(0)
 
     def start(self, client):
@@ -137,42 +117,29 @@ class Organizer:
 
     def stop(self, client):
         print("Acquiring the lock...")
-
         self.lock.acquire()
-
         print("Stopping")
-
         print("Number of clients %d" % len(self.clients))
-
         print("Client: %s" % client)
 
         if self.clients.get(client) is not None:
             print("Pop client")
-
             self.clients.pop(client)
-
         else:
             print("Client does not exists")
-
             print("Releasing the lock...")
-
             self.lock.release()
-
             return False
 
         a = len(self.clients)
-
         print("Number of clients %d" % len(self.clients))
 
         if a <= 0:
             self.stop_flag.set()
-
             self.task.join()
-
             self.stop_flag.clear()
 
         print("Releasing the lock...")
-
         self.lock.release()
 
     def close(self):
@@ -212,9 +179,8 @@ def exit_handler(signal, frame):
     organizer.close()
     sio.disconnect()
 
-    if not camera.closed:
-        camera.close()
-        print("Camera closed")
+    camera.release()
+    print("Camera closed")
 
 
 if __name__ == "__main__":
