@@ -1,19 +1,18 @@
-from datetime import datetime, timedelta
+import atexit
 import json
 import multiprocessing
 import time
 from collections import deque
+from datetime import datetime, timedelta
+from io import BytesIO
 from typing import List
-from picamera import PiCamera
-from picamera.array import PiRGBArray
-import atexit
-from PIL import Image
 
 import cv2
 import numpy as np
 import requests
-from io import BytesIO
-
+from picamera import PiCamera
+from picamera.array import PiRGBArray
+from PIL import Image
 
 DELAY = 5
 REQUEST_TIMEOUT = 2
@@ -55,7 +54,7 @@ def post_faces(faces):
 
 def post_face(image: Image.Image):
     image_bytes = BytesIO()
-    image.save(image_bytes, 'JPG')
+    image.save(image_bytes, "JPG")
     # img_bytes = cv2.encode('.jpg', np.array(image))
     files = {"file": ("d.jpg", image_bytes)}
 
@@ -72,9 +71,7 @@ def post_face(image: Image.Image):
 
     try:
         url = BASE_URL + "/upload"
-        response = requests.post(
-            url, files=files, data=data, timeout=REQUEST_TIMEOUT
-        )
+        response = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT)
     except Exception as e:
         print(e)
     else:
@@ -82,6 +79,7 @@ def post_face(image: Image.Image):
             print(response.json())
     finally:
         pass
+
 
 @atexit.register
 def exit_handler():
