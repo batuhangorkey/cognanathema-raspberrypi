@@ -6,7 +6,6 @@ import threading
 import time
 from typing import List
 
-
 import adafruit_mlx90640
 import board
 import busio
@@ -16,8 +15,9 @@ import numpy as np
 import socketio
 import cv2 as cv
 from PIL import Image
+from scipy import ndimage
 
-sio = socketio.Client(logger=True)
+sio = socketio.Client(logger=True, reconnection_attempts=5)
 
 camera = cv.VideoCapture(0)
 camera.set(cv.CAP_PROP_FRAME_WIDTH, 640)
@@ -45,11 +45,13 @@ class Organizer:
 
         while not self.stop_flag.is_set():
             ret, frame = camera.read()
-            
+
             if ret:
-                ret, encoded_image = cv.imencode(".jpg", frame, [cv.IMWRITE_JPEG_QUALITY, 20])
+                ret, encoded_image = cv.imencode(
+                    ".jpg", frame, [cv.IMWRITE_JPEG_QUALITY, 20]
+                )
                 sio.emit("live_stream", encoded_image.tobytes())
-            
+
             self.stream.seek(0)
             image = Image.open(self.stream)
             self.stream.seek(0)
@@ -63,7 +65,10 @@ class Organizer:
             time.sleep(0.1)
 
     def thermal_feed(self):
+        cm = mpl.colormaps["bwr"]  # type: ignore
+        
         while not self.stop_flag.is_set():
+            start = time.monotonic()
             try:
                 mlx.getFrame(buffer)  # type: ignore
             except ValueError:
@@ -74,11 +79,11 @@ class Organizer:
             # frame = frame.clip(0, 60)
             frame = np.fliplr(frame)
             normalized = (frame - frame.min()) / (frame.max() - frame.min())
-
-            cm = mpl.colormaps["plasma_r"]  # type: ignore
-            colored = np.uint8(cm(normalized) * 255)
-            image = Image.fromarray(colored[:, :, :3] * 255)  # type: ignore
-            image = image.resize((32 * 10, 24 * 10))
+            zoomed = ndimage.zoom(normalized, 20)
+            
+            colored = np.uint8(cm(zoomed) * 255)
+            image = Image.fromarray(colored[:, :, :3])  # type: ignore
+            
             image.save(self.stream, "jpeg")
 
             self.stream.seek(0)
@@ -94,10 +99,12 @@ class Organizer:
                 "mean": mean_value,
             }
 
+            print(time.monotonic() - start)
             sio.emit("live_stream", data)
 
             self.stream.seek(0)
             self.stream.truncate(0)
+            
 
     def start(self, client):
         with self.lock:

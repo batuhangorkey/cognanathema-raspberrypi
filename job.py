@@ -7,11 +7,10 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import List
 
-import cv2
+import cv2 as cv
 import numpy as np
 import requests
-from picamera import PiCamera
-from picamera.array import PiRGBArray
+from picamera2 import Picamera2
 from PIL import Image
 
 DELAY = 5
@@ -20,13 +19,17 @@ BASE_URL = "https://89fc-94-55-176-14.ngrok-free.app"
 PORT = "5000"
 RESOLUTION = (640, 480)
 
-faceCascade = cv2.CascadeClassifier("cascades/haarcascade_frontalface_default.xml")
-camera = PiCamera(resolution=RESOLUTION)
-raw = PiRGBArray(camera, size=RESOLUTION)
+faceCascade = cv.CascadeClassifier("cascades/haarcascade_frontalface_default.xml")
+
+picam2 = Picamera2()
+picam2.configure(
+    picam2.create_preview_configuration(main={"format": "XRGB8888", "size": (640, 480)}) # type: ignore
+)
+picam2.start()
 
 
 def detect_faces(frame) -> list:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     faces = faceCascade.detectMultiScale(
         gray, scaleFactor=1.3, minNeighbors=5, minSize=(150, 150)
     )
@@ -83,7 +86,7 @@ def post_face(image: Image.Image):
 
 @atexit.register
 def exit_handler():
-    camera.close()
+    picam2.close()
     print("Camera closed")
 
 
@@ -94,18 +97,13 @@ if __name__ == "__main__":
     face_time: float = 0.0
     stream = BytesIO()
     captured = False
-    # display_process = multiprocessing.Process(target=display)
+
     print("Started")
     while True:
         loop_start_time = time.time()
-        try:
-            camera.capture(raw, format="bgr", use_video_port=True)
-        except:
-            camera.close()
-            break
-        frame = raw.array
-        raw.seek(0)
-        raw.truncate(0)
+
+        frame = picam2.capture_array()
+        
         faces = detect_faces(frame)
         if len(faces) > 0:
             crop_faces(frame, faces)
@@ -119,5 +117,6 @@ if __name__ == "__main__":
                 post_faces(faces)
                 captured = True
                 timer = time.time()
+
         loop_end_time = time.time()
         delta_time = loop_end_time - loop_start_time
