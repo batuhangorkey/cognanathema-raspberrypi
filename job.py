@@ -21,11 +21,12 @@ RESOLUTION = (640, 480)
 
 faceCascade = cv.CascadeClassifier("cascades/haarcascade_frontalface_default.xml")
 
+# 64 bit Raspbian os does not support picamerav1
 picam2 = Picamera2()
 picam2.configure(
-    picam2.create_preview_configuration(main={"format": "XRGB8888", "size": (640, 480)}) # type: ignore
+    picam2.create_preview_configuration(main={"format": "XRGB8888", "size": (640, 480)})  # type: ignore
 )
-picam2.start()
+picam2.start()  # type: ignore
 
 
 def detect_faces(frame) -> list:
@@ -59,7 +60,7 @@ def post_face(image: Image.Image):
     image_bytes = BytesIO()
     image.save(image_bytes, "JPG")
     # img_bytes = cv2.encode('.jpg', np.array(image))
-    files = {"file": ("d.jpg", image_bytes)}
+    files = {"file": ("cam.jpg", image_bytes)}
 
     start_to_post = time.time() - loop_start_time
     start_to_post = timedelta(seconds=start_to_post)
@@ -103,7 +104,7 @@ if __name__ == "__main__":
         loop_start_time = time.time()
 
         frame = picam2.capture_array()
-        
+
         faces = detect_faces(frame)
         if len(faces) > 0:
             crop_faces(frame, faces)
