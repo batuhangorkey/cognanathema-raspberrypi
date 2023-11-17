@@ -31,29 +31,30 @@ logger.addHandler(handler)
 I2C = busio.I2C(board.SCL, board.SDA, frequency=400000)
 SENSOR_SHAPE = (24, 32)
 TARGET_SHAPE = (480, 640)
+CAMERA_SIZE_FULL = (1640, 1232)
+CAMERA_SIZE_LOW = (640, 480)
+SERVER_URL = "https://2ed2-94-55-176-14.ngrok-free.app"
 
 sio = socketio.Client(logger=True, reconnection_attempts=5)
 
 # 64 bit Raspbian os does not support picamerav1
+# ALLAH KITAP ASKINDA NEFRET ETTIM, böyle bir api yazılmaz
+# 64 bit os var diye rezil olduk
 picam2 = Picamera2()
-capture_config = picam2.create_still_configuration(
-    main={"size": (640, 480), "format": "RGB888"},
-)
+picam2.start_preview(Preview.NULL)
+
+capture_config = picam2.create_still_configuration()
 
 video_config = picam2.create_video_configuration(
-    main={"size": (640, 480)},
-    lores={"size": (640, 480)},
-    display="lores",
-    encode="lores",
+    {"size": CAMERA_SIZE_FULL},
 )
 
 video_config2 = picam2.create_video_configuration()
 
 config = picam2.create_preview_configuration({"size": (640, 480)})
 
-picam2.configure(capture_config)  # type: ignore
+picam2.configure(video_config)  # type: ignore
 
-picam2.start_preview()
 picam2.start()  # type: ignore
 
 
@@ -76,6 +77,7 @@ class Organizer:
         cam_buffer = io.BytesIO()
 
         while not self.stop_flag.is_set():
+            start = time.monotonic()
             frame: np.ndarray = picam2.capture_array()  # type: ignore
             # logger.info(type(frame))
             image = Image.fromarray(frame[:, :, :3])
@@ -94,6 +96,7 @@ class Organizer:
             sio.emit("live_stream", data)
 
             time.sleep(0.5)
+            logger.info(time.monotonic() - start)
 
         logger.info("Camera feed exited...")
 
@@ -116,19 +119,17 @@ class Organizer:
                 frame[
                     dead_pixel[0] - 1 : dead_pixel[0] + 2,
                     dead_pixel[1] - 1 : dead_pixel[1] + 2,
-                ],
+                ],  # type: ignore
                 where=kernel,
             )
             frame[dead_pixel] = a
             frame = np.fliplr(frame)
 
-            logger.info(time.monotonic() - start)
-            start = time.monotonic()
-
-            normalized: np.ndarray = (frame - frame.min()) / (frame.max() - frame.min())
+            normalized: np.ndarray = (frame - frame.min()) / (
+                frame.max() - frame.min()
+            )
             zoomed = ndimage.zoom(normalized, 20)
 
-            logger.info(time.monotonic() - start)
             # zoomed = cv.resize(normalized, TARGET_SHAPE[::-1], interpolation=cv.INTER_LINEAR)
 
             colored = np.uint8(cm(zoomed) * 255)
@@ -154,6 +155,8 @@ class Organizer:
             self.stream.seek(0)
             self.stream.truncate(0)
 
+            logger.info(time.monotonic() - start)
+
     def start(self, client):
         with self.lock:
             if self.clients.get(client) is None:
@@ -172,6 +175,9 @@ class Organizer:
                 for task in self.tasks:
                     task.start()
                 self.start_flag.set()
+            else:
+                # we are already streaming
+                sio.send("Started streaming")
 
     def stop(self, client):
         logger.info("Acquiring the lock...")
@@ -262,5 +268,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, exit_handler)
     signal.signal(signal.SIGUSR2, exit_handler)
 
-    sio.connect("https://f224-94-55-176-14.ngrok-free.app", wait_timeout=5)
+    sio.connect(SERVER_URL, wait_timeout=5)
     sio.wait()

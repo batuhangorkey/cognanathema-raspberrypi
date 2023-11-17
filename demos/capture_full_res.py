@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-
 # Capture a JPEG while still running in the preview mode.
 
 import time
