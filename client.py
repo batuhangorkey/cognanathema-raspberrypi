@@ -66,11 +66,14 @@ class Organizer:
     def __init__(self):
         self.clients = {}
         self.tasks: List[threading.Thread] = []
+        
         self.stream = io.BytesIO()
         self.compressed = io.BytesIO()
+        
         self.start_flag = threading.Event()
         self.stop_flag = threading.Event()
         self.lock = threading.Lock()
+        self.condition = threading.Condition()
 
     def camera_feed(self):
         logger.info("Camera feed started...")
@@ -78,7 +81,11 @@ class Organizer:
 
         while not self.stop_flag.is_set():
             start = time.monotonic()
-            frame: np.ndarray = picam2.capture_array()  # type: ignore
+            
+            with self.condition:
+                self.condition.wait()
+                frame: np.ndarray = picam2.capture_array()  # type: ignore
+                
             # logger.info(type(frame))
             image = Image.fromarray(frame[:, :, :3])
 
@@ -95,7 +102,6 @@ class Organizer:
 
             sio.emit("live_stream", data)
 
-            time.sleep(0.5)
             logger.info(time.monotonic() - start)
 
         logger.info("Camera feed exited...")
@@ -110,7 +116,10 @@ class Organizer:
         while not self.stop_flag.is_set():
             start = time.monotonic()
             try:
-                mlx.getFrame(buffer)  # type: ignore
+                with self.condition:
+                    mlx.getFrame(buffer)  # type: ignore
+                    self.condition.notify_all()
+                    
             except ValueError:
                 continue
 
@@ -159,6 +168,8 @@ class Organizer:
 
     def start(self, client):
         with self.lock:
+            data = {"stream": "start"}
+
             if self.clients.get(client) is None:
                 self.clients[client] = "running"
 
@@ -166,7 +177,7 @@ class Organizer:
             logger.info("Client: %s" % client)
 
             if not self.start_flag.is_set():
-                sio.send("Started streaming")
+                sio.send(data)
                 logger.info("Starting new threads")
 
                 self.tasks.append(threading.Thread(target=self.thermal_feed))
@@ -177,7 +188,7 @@ class Organizer:
                 self.start_flag.set()
             else:
                 # we are already streaming
-                sio.send("Started streaming")
+                sio.send(data)
 
     def stop(self, client):
         logger.info("Acquiring the lock...")
@@ -231,12 +242,14 @@ def start_stream(data):
     logger.info("Frames serving")
     id = data["client"]
     organizer.start(id)
+    sio.send({"viewer_count": len(organizer.clients)})
 
 
 @sio.event
 def stop_stream(data):
     id = data["client"]
     organizer.stop(id)
+    sio.send({"viewer_count": len(organizer.clients)})
 
 
 @sio.event
