@@ -32,7 +32,7 @@ from scipy import ndimage
 
 logger = logging.getLogger("cogna")
 logger.setLevel(logging.DEBUG)
-format = "%(threadName)s - %(processName)-16s - %(message)s"
+format = "%(threadName)-14s %(processName)-18s %(message)s"
 logger_format = logging.Formatter(format)
 handler = logging.StreamHandler()
 handler.setFormatter(logger_format)
@@ -52,7 +52,7 @@ CAMERA_SIZE_LOW = (640, 480)
 SCALING_FACTOR_X = CAMERA_SIZE_FULL[0] / TARGET_SHAPE[1]
 SCALING_FACTOR_Y = CAMERA_SIZE_FULL[1] / TARGET_SHAPE[0]
 
-SERVER_URL = "https://5cc9-94-55-176-14.ngrok-free.app"
+SERVER_URL = "https://6418-94-55-176-14.ngrok-free.app"
 
 CM = mpl.colormaps["bwr_r"]  # type: ignore
 DEAD_PIXEL = np.unravel_index(212, SENSOR_SHAPE)
@@ -108,6 +108,23 @@ def timeit(func):
         return result
 
     return timeit_wrapper
+
+
+def minmaxnorm(array):
+    """
+    min-max feature scaling metodu.
+    data range'i [0, 1] e getirir
+    """
+    return (array - array.min()) / (array.max() - array.min())
+
+
+def colorize(array):
+    """
+    normalize and colorize
+    """
+    normalized: np.ndarray = minmaxnorm(array)
+    # burada renklendiriyoruz, normalize input istiyor matplotlib
+    return (CM(normalized) * 255).astype(np.uint8)[:, :, :3]
 
 
 def cut_area(area_to_cut, frame) -> np.ndarray:
@@ -278,23 +295,17 @@ def get_thermal_frame(thermal_buffer):
     )
     frame[DEAD_PIXEL] = a
     frame = np.fliplr(frame)
-
+    cv.imwrite("thermal_demo1.png", colorize(frame))
     frame_upscaled = ndimage.zoom(frame, 20)  # spline interpolation
-    # min-max feature scaling metodu. data range'i [0, 1] e getirir
-    normalized: np.ndarray = (frame_upscaled - frame.min()) / (
-        frame_upscaled.max() - frame_upscaled.min()
-    )
-    # burada renklendiriyoruz, normalize input istiyor matplotlib
-    colored = np.uint8(CM(normalized) * 255)  # type: ignore
-    return colored[:, :, :3], frame_upscaled  # type: ignore
+    colored = colorize(frame_upscaled)  # type: ignore
+    return colored, frame_upscaled  # type: ignore
 
 
 class ThermalProcess(Process):
-    def __init__(self, stop_flag, queue, streaming_flag):
+    def __init__(self, stop_flag, queue):
         Process.__init__(self)
 
         self.stop_flag = stop_flag
-        self.streaming_flag = streaming_flag
         self.queue: multiprocessing.Queue = queue
         self.flag = multiprocessing.Event()
 
@@ -309,6 +320,7 @@ class ThermalProcess(Process):
             ret = get_thermal_frame(thermal_buffer)
             if ret is None:
                 continue
+            logger.info(f"Thermal Camera captured at: {time.monotonic()}")
             try:
                 frame, data = ret
                 self.queue.put((frame, data), block=False)
@@ -318,8 +330,8 @@ class ThermalProcess(Process):
             except Exception as e:
                 logger.info(e)
 
-            end = time.monotonic()
-            logger.info(f"Time taken at thermal loop: {end - start}")
+            # end = time.monotonic()
+            # logger.info(f"Time taken at thermal loop: {end - start}")
         logger.info("Thermal loop finished")
 
 
@@ -347,7 +359,10 @@ class CameraProcess(Process):
 
         while not self.stop_flag.is_set():
             start = time.monotonic()
+            if not self.queue.empty():
+                continue
             frame: np.ndarray = picam2.capture_array()  # type: ignore
+            logger.info(f"PiCam captured at: {time.monotonic()}")
             # 4. katman ne bilmiyorum
             frame = frame[:, :, :3]
             try:
@@ -356,9 +371,8 @@ class CameraProcess(Process):
                 pass
             # if self.streaming_flag.is_set():
             #    send_frame(frame, cam_buffer)
-            time.sleep(0.5)
-            now = time.monotonic()
-            logger.info(f"Time at Camera Process: {now - start}")
+            # now = time.monotonic()
+            # logger.info(f"Time at Camera Process: {now - start}")
 
         picam2.close()
         logger.info("Cam loop finished")
@@ -373,7 +387,7 @@ class Organizer:
         self.tasks = {}
         self.counter = multiprocessing.Value("i", 0)
 
-        self.start_flag = threading.Event()
+        self.streaming_flag = threading.Event()
         self.stop_stream_flag = threading.Event()
         self.stop_flag = multiprocessing.Event()
         self.process_done = multiprocessing.Event()
@@ -388,7 +402,7 @@ class Organizer:
             target=self.main_loop, name="Main Loop"
         )
         self.tasks["thermal_loop"] = ThermalProcess(
-            self.stop_flag, self.thermal_queue, self.start_flag
+            self.stop_flag, self.thermal_queue
         )
         self.tasks["cam_loop"] = CameraProcess(self.stop_flag, self.cam_queue)
 
@@ -410,8 +424,8 @@ class Organizer:
             # state = 0
             # logger.info("All frames gathered. Ready to proceed")
             process_frame(self.counter, frame, thermal_frame, thermal_data)
-
-            if self.start_flag.is_set():
+            time.sleep(2)
+            if self.streaming_flag.is_set():
                 try:
                     send_cam_frame(frame, cam_buffer)
                     send_thermal_image(
@@ -433,10 +447,10 @@ class Organizer:
             logger.info("Number of clients %d" % len(self.clients))
             logger.info("Client: %s" % client)
 
-            if not self.start_flag.is_set():
+            if not self.streaming_flag.is_set():
                 SIO.send(data)
                 logger.info("Starting new threads")
-                self.start_flag.set()
+                self.streaming_flag.set()
                 self.tasks["cam_loop"].streaming_flag.set()
             else:
                 # we are already streaming
@@ -472,7 +486,7 @@ class Organizer:
     def stop_streaming(self):
         with self.lock:
             self.stop_stream_flag.set()
-            self.start_flag.clear()
+            self.streaming_flag.clear()
 
     def cleanup(self):
         self.stop_flag.set()
@@ -493,7 +507,7 @@ class Organizer:
 
         self.tasks.clear()
         self.stop_flag.clear()
-        self.start_flag.clear()
+        self.streaming_flag.clear()
 
 
 @SIO.event
@@ -525,9 +539,9 @@ def disconnect():
 
 def exit_handler(signal, frame):
     logger.info("Exit sequence started...")
+    SIO.disconnect()
 
     organizer.cleanup()
-    SIO.disconnect()
 
     logger.info("Camera closed")
 
@@ -536,11 +550,12 @@ def exit_handler(signal, frame):
 
 if __name__ == "__main__":
     logger.info("We are starting.")
+    SIO.connect(SERVER_URL, wait_timeout=50, wait=True)
+
     organizer = Organizer()
 
     signal.signal(signal.SIGINT, exit_handler)
     signal.signal(signal.SIGTERM, exit_handler)
     signal.signal(signal.SIGUSR2, exit_handler)
 
-    SIO.connect(SERVER_URL, wait_timeout=50)
     SIO.wait()
